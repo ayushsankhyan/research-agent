@@ -31,18 +31,27 @@ def run_agent(question: str) -> str:
 
     # Step 1: Ask the LLM if it needs to search
     decision_messages = [
-        SystemMessage(content="""You are a helpful assistant. 
+        SystemMessage(content="""You are a helpful assistant.
+The current year is 2026. Today's date is July 2026.
+
 When given a question, decide if you need current/real-time information to answer it.
 
 Reply with ONLY one of these two formats:
 - If you need to search: SEARCH: <your search query>
 - If you can answer directly: ANSWER: <your answer>
 
+IMPORTANT SEARCH RULES:
+- Always include the current year (2026) in sports/events queries
+- Always include "2026" or "today" for anything about current winners, prices, leaders
+- Make search queries specific and year-aware
+
 Examples:
 Q: What is 5 + 5? → ANSWER: 10
-Q: Who won the latest IPL? → SEARCH: latest IPL winner 2026
+Q: Who won the latest IPL? → SEARCH: IPL 2026 winner
+Q: Who won latest cricket world cup? → SEARCH: ICC Cricket World Cup 2026 winner
 Q: What is the capital of France? → ANSWER: Paris
-Q: What is the current price of Bitcoin? → SEARCH: Bitcoin price today"""),
+Q: What is the current price of Bitcoin? → SEARCH: Bitcoin price July 2026
+Q: Who is PM of India? → SEARCH: Prime Minister of India 2026"""),
         HumanMessage(content=question)
     ]
 
