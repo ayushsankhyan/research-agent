@@ -1,5 +1,5 @@
-# main.py
-# A research agent: FastAPI + LangChain + Groq + Tavily
+# main.py - Python 3.14 compatible version
+# Uses modern LangChain patterns instead of deprecated agent API
 
 import os
 from dotenv import load_dotenv
@@ -9,76 +9,92 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from langchain_groq import ChatGroq
 from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain.agents import create_react_agent, AgentExecutor
-from langchain.prompts import PromptTemplate
+from langchain_core.messages import HumanMessage, SystemMessage
 
 # ─────────────────────────────────────────────────────────
-# SET UP THE AGENT'S BRAIN AND TOOLS
+# SETUP
 # ─────────────────────────────────────────────────────────
-
 llm = ChatGroq(
     model="llama-3.3-70b-versatile",
     temperature=0
 )
 
-search_tool = TavilySearchResults(max_results=3)
-tools = [search_tool]
+search_tool = TavilySearchResults(max_results=2)
 
-# Write the ReAct prompt ourselves — no hub dependency needed
-# This is the exact structure the agent uses to reason:
-# Thought -> Action -> Observation -> repeat -> Final Answer
-react_prompt = PromptTemplate.from_template("""
-Answer the following questions as best you can. You have access to the following tools:
+# ─────────────────────────────────────────────────────────
+# SIMPLE AGENT FUNCTION
+# Instead of LangChain's agent framework, we manually implement
+# the same think → search → answer loop
+# This works on any Python version
+# ─────────────────────────────────────────────────────────
+def run_agent(question: str) -> str:
 
-{tools}
+    # Step 1: Ask the LLM if it needs to search
+    decision_messages = [
+        SystemMessage(content="""You are a helpful assistant. 
+When given a question, decide if you need current/real-time information to answer it.
 
-Use the following format:
+Reply with ONLY one of these two formats:
+- If you need to search: SEARCH: <your search query>
+- If you can answer directly: ANSWER: <your answer>
 
-Question: the input question you must answer
-Thought: you should always think about what to do
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+Examples:
+Q: What is 5 + 5? → ANSWER: 10
+Q: Who won the latest IPL? → SEARCH: latest IPL winner 2026
+Q: What is the capital of France? → ANSWER: Paris
+Q: What is the current price of Bitcoin? → SEARCH: Bitcoin price today"""),
+        HumanMessage(content=question)
+    ]
 
-IMPORTANT RULES:
-- If the question can be answered directly using reasoning, math, or 
-  knowledge you already have (such as arithmetic, definitions, or 
-  logic), DO NOT use a tool. Instead, go straight to:
-  Thought: I can answer this directly without searching.
-  Final Answer: [your answer]
-- Only use a tool when you genuinely need current, real-world, or 
-  external information that you cannot reliably know on your own.
-- NEVER write "Action: None". If you don't need a tool, skip directly 
-  to "Final Answer:".
-- When search results contain information from MULTIPLE different 
-  years or dates, always identify and use ONLY the most recent, 
-  current result. Explicitly look for dates in the search results 
-  and compare them before answering. Ignore older results unless 
-  the question specifically asks about history.
+    decision = llm.invoke(decision_messages).content.strip()
 
-Begin!
+    # Step 2: If it decided to search, do the search
+    if decision.startswith("SEARCH:"):
+        query = decision.replace("SEARCH:", "").strip()
+        print(f"🔍 Searching for: {query}")
 
-Question: {input}
-Thought:{agent_scratchpad}
-""")
+        search_results = search_tool.invoke(query)
 
-agent = create_react_agent(llm=llm, tools=tools, prompt=react_prompt)
+        # Format search results into readable text
+        results_text = ""
+        for r in search_results:
+            results_text += f"Source: {r.get('url', '')}\n"
+            results_text += f"Content: {r.get('content', '')}\n\n"
 
-agent_executor = AgentExecutor(
-    agent=agent,
-    tools=tools,
-    verbose=True,
-    handle_parsing_errors=True,
-    max_iterations=5
-)
+        # Step 3: Ask LLM to answer using the search results
+        answer_messages = [
+            SystemMessage(content="""You are a helpful assistant.
+You will be given a question and search results.
+Answer the question directly and concisely using only the search results provided.
+Always state the winner/result clearly at the start of your answer.
+Use only the most recent information when multiple time periods appear.
+If the search results describe a match or competition, always explicitly state who WON."""),
+            HumanMessage(content=f"""Here is the question you must answer: {question}
+
+Here are the search results to use:
+{results_text}
+
+Now answer the question: {question}""")
+        ]
+
+        answer = llm.invoke(answer_messages).content.strip()
+        return answer
+
+    # Step 4: If it decided to answer directly
+    elif decision.startswith("ANSWER:"):
+        answer = decision.replace("ANSWER:", "").strip()
+        print(f"💡 Answered directly without searching")
+        return answer
+
+    # Fallback: just return what the LLM said
+    else:
+        print(f"⚠️ Unexpected format, returning raw response")
+        return decision
+
 
 # ─────────────────────────────────────────────────────────
 # FASTAPI APP
 # ─────────────────────────────────────────────────────────
-
 app = FastAPI(title="Research Agent API")
 
 
@@ -93,8 +109,8 @@ def root():
 
 @app.post("/research")
 def research(question: Question):
-    result = agent_executor.invoke({"input": question.text})
+    answer = run_agent(question.text)
     return {
         "question": question.text,
-        "answer": result["output"]
+        "answer": answer
     }
